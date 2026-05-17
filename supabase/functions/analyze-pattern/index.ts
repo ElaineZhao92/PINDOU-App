@@ -2,7 +2,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 // Check openrouter.ai/models for the latest Gemini Flash model ID
-const MODEL = 'google/gemini-3-flash'
+// 在 openrouter.ai/models 搜索 gemini 确认最新可用的模型 ID
+const MODEL = 'google/gemini-3-flash-preview'
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -71,9 +72,19 @@ Deno.serve(async (req: Request) => {
     const messages = [
       {
         role: 'system',
-        content: `你是拼豆图纸分析助手。分析图纸中每种颜色对应的拼豆色号和数量。
-色号格式：字母+数字，有效系列为 A(1-26)、B(1-32)、C(1-29)、D(1-26)、E(1-24)、F(1-25)、G(1-21)、H(1-23)、M(1-15)。
-只返回 JSON 数组，不要包含任何其他文字、注释或 Markdown 代码块。
+        content: `你是拼豆图纸分析助手。你的任务是从图纸图片中提取每种颜色的色号和所需数量。
+
+【优先方法】图纸上通常会直接标注色号和数量，格式多样，例如：
+- "A12 (49)" 表示 A12 色需要 49 颗
+- "A12: 49" 或 "A12×49" 或 "A12 49颗" 等类似格式
+- 图纸边缘、下方或图例区域的颜色统计列表
+请优先识别并读取这些文字标注，这比人工数格子准确得多。
+
+【备用方法】如果图纸没有文字标注，则通过识别图案中的颜色分布来估算每种颜色的用量。
+
+【色号规则】有效系列为 A(1-26)、B(1-32)、C(1-29)、D(1-26)、E(1-24)、F(1-25)、G(1-21)、H(1-23)、M(1-15)。
+
+【输出格式】只返回 JSON 数组，不包含任何其他文字、注释或 Markdown 代码块。
 格式：[{"color_code":"A1","quantity":120},{"color_code":"B3","quantity":45}]`,
       },
       {
