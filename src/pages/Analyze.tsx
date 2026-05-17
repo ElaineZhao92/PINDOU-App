@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
@@ -20,6 +20,11 @@ interface UploadedImage {
   error: string | null
 }
 
+interface ImageAnalysis {
+  img: UploadedImage
+  results: AnalysisResult[]
+}
+
 export default function Analyze({ showToast }: AnalyzeProps) {
   const { user } = useAuthStore()
   const { inventory, setQuantity } = useInventory()
@@ -30,7 +35,7 @@ export default function Analyze({ showToast }: AnalyzeProps) {
   const [beadColors, setBeadColors] = useState<BeadColor[]>([])
   const [images, setImages] = useState<UploadedImage[]>([])
   const [analyzing, setAnalyzing] = useState(false)
-  const [editedResults, setEditedResults] = useState<AnalysisResult[]>([])
+  const [imageAnalyses, setImageAnalyses] = useState<ImageAnalysis[]>([])
   const [patternName, setPatternName] = useState('')
   const [saving, setSaving] = useState(false)
   const [deducting, setDeducting] = useState(false)
@@ -41,6 +46,21 @@ export default function Analyze({ showToast }: AnalyzeProps) {
 
   const getHex = (code: string) => beadColors.find(c => c.code === code)?.hex ?? '#ddd'
   const getName = (code: string) => beadColors.find(c => c.code === code)?.name ?? ''
+  const getShortage = (code: string, needed: number) => (inventory[code]?.quantity ?? 0) - needed
+
+  // Merged totals across all images (for shortage display and deduct)
+  const mergedResults = useMemo(() => {
+    const merged: Record<string, number> = {}
+    for (const ia of imageAnalyses) {
+      for (const r of ia.results) {
+        merged[r.color_code] = (merged[r.color_code] ?? 0) + r.quantity
+      }
+    }
+    return Object.entries(merged).map(([color_code, quantity]) => ({ color_code, quantity }))
+  }, [imageAnalyses])
+
+  const totalBeads = mergedResults.reduce((s, r) => s + r.quantity, 0)
+  const hasShortage = mergedResults.some(r => getShortage(r.color_code, r.quantity) < 0)
 
   const uploadToStorage = async (img: UploadedImage, idx: number): Promise<string | null> => {
     if (!user) return null
@@ -62,7 +82,7 @@ export default function Analyze({ showToast }: AnalyzeProps) {
       error: null,
     }))
     setImages(prev => [...prev, ...newImgs])
-    setEditedResults([])
+    setImageAnalyses([])
   }, [])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -76,7 +96,29 @@ export default function Analyze({ showToast }: AnalyzeProps) {
       URL.revokeObjectURL(prev[idx].previewUrl)
       return prev.filter((_, i) => i !== idx)
     })
-    setEditedResults([])
+    setImageAnalyses([])
+  }
+
+  const analyzeOneImage = async (imageUrl: string, token: string): Promise<AnalysisResult[]> => {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+    const res = await fetch(`${supabaseUrl}/functions/v1/analyze-pattern`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ imageUrls: [imageUrl] }),
+    })
+    const data = await res.json()
+    if (!res.ok) {
+      if (data.code === 'NO_API_KEY') {
+        const err = new Error('NO_API_KEY') as Error & { code: string }
+        err.code = 'NO_API_KEY'
+        throw err
+      }
+      throw new Error(data.error ?? '分析失败')
+    }
+    return data as AnalysisResult[]
   }
 
   const handleAnalyze = async () => {
@@ -87,7 +129,9 @@ export default function Analyze({ showToast }: AnalyzeProps) {
     }
 
     setAnalyzing(true)
+    setImageAnalyses([])
     try {
+      // Upload all images first
       const updatedImages = [...images]
       for (let i = 0; i < updatedImages.length; i++) {
         if (!updatedImages[i].storageUrl) {
@@ -99,82 +143,101 @@ export default function Analyze({ showToast }: AnalyzeProps) {
         }
       }
 
-      const imageUrls = updatedImages.map(i => i.storageUrl).filter(Boolean) as string[]
-      if (imageUrls.length === 0) { showToast('所有图片上传失败，请重试', 'error'); return }
-
-      const { data: { session } } = await supabase.auth.getSession()
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-      const res = await fetch(`${supabaseUrl}/functions/v1/analyze-pattern`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.access_token}`,
-        },
-        body: JSON.stringify({ imageUrls }),
-      })
-
-      const data = await res.json()
-      if (!res.ok) {
-        if (data.code === 'NO_API_KEY') { navigate('/settings'); return }
-        throw new Error(data.error ?? '分析失败')
+      const validImages = updatedImages.filter(i => i.storageUrl)
+      if (validImages.length === 0) {
+        showToast('所有图片上传失败，请重试', 'error')
+        return
       }
 
-      setEditedResults(data.map((r: AnalysisResult) => ({ ...r })))
-      showToast(`分析完成！识别出 ${data.length} 种颜色`, 'success')
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : '分析失败，请重试', 'error')
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('请重新登录')
+
+      // Analyze each image separately (parallel)
+      const allResults = await Promise.all(
+        validImages.map(img => analyzeOneImage(img.storageUrl!, session.access_token))
+      )
+
+      const analyses: ImageAnalysis[] = validImages.map((img, i) => ({
+        img,
+        results: allResults[i].map(r => ({ ...r })),
+      }))
+      setImageAnalyses(analyses)
+
+      const uniqueColors = new Set(allResults.flatMap(r => r.map(item => item.color_code))).size
+      showToast(`分析完成！共识别 ${uniqueColors} 种颜色（${validImages.length} 张图纸）`, 'success')
+    } catch (err: unknown) {
+      const e = err as Error & { code?: string }
+      if (e.code === 'NO_API_KEY') { navigate('/settings'); return }
+      showToast(e.message ?? '分析失败，请重试', 'error')
     } finally {
       setAnalyzing(false)
     }
   }
 
-  const updateResultQty = (idx: number, value: number) =>
-    setEditedResults(prev => prev.map((r, i) => i === idx ? { ...r, quantity: Math.max(0, value) } : r))
+  const updateResult = (imgIdx: number, resultIdx: number, quantity: number) => {
+    setImageAnalyses(prev => prev.map((ia, i) =>
+      i !== imgIdx ? ia : {
+        ...ia,
+        results: ia.results.map((r, j) => j !== resultIdx ? r : { ...r, quantity: Math.max(0, quantity) }),
+      }
+    ))
+  }
 
-  const removeResult = (idx: number) =>
-    setEditedResults(prev => prev.filter((_, i) => i !== idx))
-
-  const getShortage = (code: string, needed: number) => (inventory[code]?.quantity ?? 0) - needed
+  const removeResult = (imgIdx: number, resultIdx: number) => {
+    setImageAnalyses(prev => prev.map((ia, i) =>
+      i !== imgIdx ? ia : { ...ia, results: ia.results.filter((_, j) => j !== resultIdx) }
+    ))
+  }
 
   const handleSave = async () => {
     if (!patternName.trim()) { showToast('请输入图纸名称', 'error'); return }
-    if (editedResults.length === 0) { showToast('没有分析结果', 'error'); return }
+    if (imageAnalyses.length === 0) { showToast('请先分析图纸', 'error'); return }
     setSaving(true)
     try {
-      const firstUrl = images.find(i => i.storageUrl)?.storageUrl ?? null
-      const ok = await createPattern(patternName.trim(), firstUrl, editedResults, [], null)
-      if (ok) { showToast('图纸已保存到档案！', 'success'); setPatternName('') }
-      else showToast('保存失败，请重试', 'error')
+      let savedCount = 0
+      for (let i = 0; i < imageAnalyses.length; i++) {
+        const { img, results } = imageAnalyses[i]
+        if (results.length === 0) continue
+        const name = imageAnalyses.length === 1
+          ? patternName.trim()
+          : `${patternName.trim()} - 第${i + 1}张`
+        const result = await createPattern(name, img.storageUrl, results, [], null)
+        if (result) savedCount++
+      }
+      if (savedCount > 0) {
+        showToast(`已将 ${savedCount} 张图纸保存到档案！`, 'success')
+        setPatternName('')
+      } else {
+        showToast('保存失败，请重试', 'error')
+      }
     } finally {
       setSaving(false)
     }
   }
 
   const handleDeduct = async () => {
-    if (editedResults.length === 0) return
-    if (!confirm(`确认从库存扣除 ${editedResults.length} 种颜色的用量？`)) return
+    if (mergedResults.length === 0) return
+    if (!confirm(`确认从库存扣除 ${mergedResults.length} 种颜色的合计用量？`)) return
     setDeducting(true)
     try {
-      for (const r of editedResults) {
+      for (const r of mergedResults) {
         const cur = inventory[r.color_code]?.quantity ?? 0
         setQuantity(r.color_code, Math.max(0, cur - r.quantity))
       }
-      showToast('库存已扣除！', 'success')
+      showToast('库存已按合计用量扣除！', 'success')
     } finally {
       setDeducting(false)
     }
   }
 
-  const hasShortage = editedResults.some(r => getShortage(r.color_code, r.quantity) < 0)
-  const totalBeads = editedResults.reduce((s, r) => s + r.quantity, 0)
-
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">分析图纸</h1>
-        <p className="text-gray-500 text-sm mt-1">上传图纸图片，AI 自动识别颜色和数量，支持多张同时分析</p>
+        <p className="text-gray-500 text-sm mt-1">上传图纸图片，AI 自动识别颜色和数量，每张图纸单独分析保存</p>
       </div>
 
+      {/* API Key warning */}
       {settings && !settings.openrouter_api_key && (
         <div className="flex items-start gap-3 bg-orange-50 border border-orange-200 rounded-xl p-4">
           <svg className="w-5 h-5 text-orange-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
@@ -218,7 +281,7 @@ export default function Analyze({ showToast }: AnalyzeProps) {
           <div className="flex items-center justify-between">
             <h3 className="font-semibold text-gray-900">已选图片（{images.length} 张）</h3>
             <button
-              onClick={() => { images.forEach(i => URL.revokeObjectURL(i.previewUrl)); setImages([]); setEditedResults([]) }}
+              onClick={() => { images.forEach(i => URL.revokeObjectURL(i.previewUrl)); setImages([]); setImageAnalyses([]) }}
               className="text-sm text-gray-400 hover:text-red-500"
             >清除全部</button>
           </div>
@@ -267,73 +330,106 @@ export default function Analyze({ showToast }: AnalyzeProps) {
         </button>
       )}
 
-      {/* Results */}
-      {editedResults.length > 0 && (
+      {/* Per-image results */}
+      {imageAnalyses.length > 0 && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="font-bold text-gray-900 text-lg">分析结果</h2>
-            <div className="flex gap-4 text-sm text-gray-500">
-              <span>共 <b className="text-gray-900">{editedResults.length}</b> 种</span>
-              <span>合计 <b className="text-gray-900">{totalBeads.toLocaleString()}</b> 颗</span>
-            </div>
-          </div>
+          <h2 className="font-bold text-gray-900 text-lg">分析结果</h2>
 
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-50 border-b border-gray-100 text-gray-500 font-medium">
-                    <th className="text-left px-4 py-3">色号</th>
-                    <th className="text-right px-4 py-3">需要量</th>
-                    <th className="text-right px-4 py-3">当前库存</th>
-                    <th className="text-right px-4 py-3">差额</th>
-                    <th className="w-8 px-2"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {editedResults.map((r, idx) => {
-                    const shortage = getShortage(r.color_code, r.quantity)
-                    return (
-                      <tr key={idx} className="border-b border-gray-50 hover:bg-gray-50/50">
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <div className="w-5 h-5 rounded flex-shrink-0 border border-gray-200" style={{ backgroundColor: getHex(r.color_code) }} />
-                            <span className="font-semibold text-gray-800">{r.color_code}</span>
-                            <span className="text-gray-400 text-xs hidden sm:inline">{getName(r.color_code)}</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <input type="number" min="0" value={r.quantity}
-                            onChange={e => updateResultQty(idx, parseInt(e.target.value) || 0)}
-                            className="w-20 text-right px-2 py-1 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
-                          />
-                        </td>
-                        <td className="px-4 py-3 text-right font-medium text-gray-700">
-                          {inventory[r.color_code]?.quantity ?? 0}
-                        </td>
-                        <td className={`px-4 py-3 text-right font-bold ${shortage < 0 ? 'text-red-500' : 'text-green-600'}`}>
-                          {shortage < 0 ? shortage : `+${shortage}`}
-                        </td>
-                        <td className="px-2 py-3">
-                          <button onClick={() => removeResult(idx)} className="text-gray-300 hover:text-red-400">
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          {imageAnalyses.map((ia, imgIdx) => (
+            <div key={imgIdx} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+              {/* Image header */}
+              <div className="flex items-center gap-3 px-4 py-3 bg-gray-50 border-b border-gray-100">
+                <img src={ia.img.previewUrl} alt="" className="w-10 h-10 rounded-lg object-cover flex-shrink-0 border border-gray-200" />
+                <div className="flex-1">
+                  <p className="font-semibold text-gray-800 text-sm">图 {imgIdx + 1}</p>
+                  <p className="text-xs text-gray-400">
+                    {ia.results.length} 种颜色 · 共 {ia.results.reduce((s, r) => s + r.quantity, 0).toLocaleString()} 颗
+                  </p>
+                </div>
+              </div>
 
+              {/* Results table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100 text-gray-500 font-medium">
+                      <th className="text-left px-4 py-2.5">色号</th>
+                      <th className="text-right px-4 py-2.5">需要量</th>
+                      <th className="text-right px-4 py-2.5">当前库存</th>
+                      <th className="text-right px-4 py-2.5">差额</th>
+                      <th className="w-8 px-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ia.results.map((r, rIdx) => {
+                      const shortage = getShortage(r.color_code, r.quantity)
+                      return (
+                        <tr key={rIdx} className="border-b border-gray-50 hover:bg-gray-50/50">
+                          <td className="px-4 py-2.5">
+                            <div className="flex items-center gap-2">
+                              <div className="w-4 h-4 rounded flex-shrink-0 border border-gray-200" style={{ backgroundColor: getHex(r.color_code) }} />
+                              <span className="font-semibold text-gray-800">{r.color_code}</span>
+                              <span className="text-gray-400 text-xs hidden sm:inline">{getName(r.color_code)}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <input type="number" min="0" value={r.quantity}
+                              onChange={e => updateResult(imgIdx, rIdx, parseInt(e.target.value) || 0)}
+                              className="w-20 text-right px-2 py-1 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                            />
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-medium text-gray-700">
+                            {inventory[r.color_code]?.quantity ?? 0}
+                          </td>
+                          <td className={`px-4 py-2.5 text-right font-bold ${shortage < 0 ? 'text-red-500' : 'text-green-600'}`}>
+                            {shortage < 0 ? shortage : `+${shortage}`}
+                          </td>
+                          <td className="px-2 py-2.5">
+                            <button onClick={() => removeResult(imgIdx, rIdx)} className="text-gray-300 hover:text-red-400">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+
+          {/* Combined summary (only for multiple images) */}
+          {imageAnalyses.length > 1 && (
+            <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-bold text-blue-800">合计汇总（{imageAnalyses.length} 张图纸）</h3>
+                <div className="flex gap-3 text-sm text-blue-600">
+                  <span><b>{mergedResults.length}</b> 种</span>
+                  <span>共 <b>{totalBeads.toLocaleString()}</b> 颗</span>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {mergedResults.map(r => (
+                  <span key={r.color_code} className="inline-flex items-center gap-1 bg-white border border-blue-100 rounded-lg px-2 py-1 text-xs">
+                    <div className="w-3 h-3 rounded-sm border border-gray-200 flex-shrink-0" style={{ backgroundColor: getHex(r.color_code) }} />
+                    <span className="font-semibold text-gray-700">{r.color_code}</span>
+                    <span className="text-gray-400">{r.quantity}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Shortage warning */}
           {hasShortage && (
             <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-              <p className="font-medium text-red-700 text-sm mb-2">库存不足：</p>
+              <p className="font-medium text-red-700 text-sm mb-2">
+                {imageAnalyses.length > 1 ? '库存不足（合计用量）：' : '库存不足：'}
+              </p>
               <div className="flex flex-wrap gap-2">
-                {editedResults.filter(r => getShortage(r.color_code, r.quantity) < 0).map(r => (
+                {mergedResults.filter(r => getShortage(r.color_code, r.quantity) < 0).map(r => (
                   <span key={r.color_code} className="inline-flex items-center gap-1.5 bg-red-100 text-red-700 text-xs px-2.5 py-1 rounded-full font-medium">
                     <div className="w-3 h-3 rounded-full border border-red-300" style={{ backgroundColor: getHex(r.color_code) }} />
                     {r.color_code}（缺 {Math.abs(getShortage(r.color_code, r.quantity))}）
@@ -343,27 +439,33 @@ export default function Analyze({ showToast }: AnalyzeProps) {
             </div>
           )}
 
+          {/* Save panel */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 space-y-4">
             <h3 className="font-bold text-gray-900">保存 & 更新库存</h3>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">图纸名称</label>
               <input type="text" value={patternName} onChange={e => setPatternName(e.target.value)}
-                placeholder="给这张图纸起个名字…"
+                placeholder="给图纸起个名字…"
                 className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
               />
+              {imageAnalyses.length > 1 && patternName.trim() && (
+                <p className="text-xs text-gray-400 mt-1.5">
+                  将分别保存为「{patternName.trim()} - 第1张」、「{patternName.trim()} - 第2张」等 {imageAnalyses.length} 个图纸档案
+                </p>
+              )}
             </div>
             <div className="flex flex-col sm:flex-row gap-3">
               <button onClick={handleSave} disabled={saving || !patternName.trim()}
                 className="flex-1 py-2.5 bg-primary text-white font-semibold rounded-xl hover:bg-primary-600 transition-colors disabled:opacity-60 flex items-center justify-center gap-2 text-sm"
               >
                 {saving && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-                保存到图纸档案
+                {imageAnalyses.length > 1 ? `保存全部 ${imageAnalyses.length} 张图纸` : '保存到图纸档案'}
               </button>
               <button onClick={handleDeduct} disabled={deducting}
                 className="flex-1 py-2.5 bg-gray-800 text-white font-semibold rounded-xl hover:bg-gray-900 transition-colors disabled:opacity-60 flex items-center justify-center gap-2 text-sm"
               >
                 {deducting && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-                确认扣除库存
+                {imageAnalyses.length > 1 ? '扣除合计库存用量' : '确认扣除库存'}
               </button>
             </div>
           </div>

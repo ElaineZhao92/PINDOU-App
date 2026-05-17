@@ -75,7 +75,7 @@ export default function BeadColorCell({
       {/* Content */}
       <div className="relative z-10 flex flex-col items-center justify-center h-full p-1 gap-0.5">
         <span
-          className={`text-[11px] font-bold leading-tight ${
+          className={`text-[13px] font-bold leading-tight ${
             isDark ? 'text-white' : 'text-gray-800'
           }`}
         >
@@ -124,7 +124,7 @@ export default function BeadColorCell({
           </div>
         ) : (
           <span
-            className={`text-[12px] font-semibold leading-tight ${
+            className={`text-[13px] font-semibold leading-tight ${
               isDark ? 'text-white/90' : 'text-gray-700'
             }`}
           >

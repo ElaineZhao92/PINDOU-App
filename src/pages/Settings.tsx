@@ -104,7 +104,7 @@ export default function Settings({ showToast }: SettingsProps) {
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
         <div className="flex items-start justify-between mb-1">
           <h2 className="font-bold text-gray-900">AI 图纸分析 · OpenRouter API Key</h2>
-          <span className="text-xs bg-green-50 text-green-600 font-medium px-2 py-0.5 rounded-full">Gemini 2.5 Flash</span>
+          <span className="text-xs bg-green-50 text-green-600 font-medium px-2 py-0.5 rounded-full">Gemini 3.0 Flash</span>
         </div>
         <p className="text-sm text-gray-400 mb-4">
           用于「分析图纸」功能的 AI 调用。Key 加密存储在你的账号下，仅你可见。
@@ -244,7 +244,7 @@ export default function Settings({ showToast }: SettingsProps) {
             ['应用名称', '我勒个豆 · PINDOU'],
             ['版本', 'v0.2.0'],
             ['支持颜色数', '221 种（A-H + M 系列）'],
-            ['AI 模型', 'Google Gemini 2.5 Flash（via OpenRouter）'],
+            ['AI 模型', 'Google Gemini 3.0 Flash（via OpenRouter）'],
           ].map(([k, v]) => (
             <div key={k} className="flex justify-between">
               <span className="text-gray-500">{k}</span>
