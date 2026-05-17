@@ -53,6 +53,45 @@ function makeId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
 }
 
+// Upsert a batch of inventory items. Returns true on success, false on failure.
+// We deliberately omit `id` from the payload and rely on the (user_id, color_code)
+// unique constraint so PostgREST handles INSERT vs UPDATE automatically.
+// After a successful upsert we write the real DB rows (with proper UUIDs) back into
+// the Zustand state so that subsequent single-item edits use UPDATE not INSERT.
+async function doBatchUpsert(
+  items: InventoryItem[],
+  userId: string,
+  set: (fn: (s: InventoryState) => Partial<InventoryState>) => void,
+): Promise<boolean> {
+  const payload = items.map((i) => ({
+    user_id: userId,
+    color_code: i.color_code,
+    quantity: i.quantity,
+    low_threshold: i.low_threshold ?? 50,
+    updated_at: i.updated_at,
+  }))
+
+  const { data, error } = await supabase
+    .from('inventory')
+    .upsert(payload, { onConflict: 'user_id,color_code' })
+    .select()
+
+  if (error) {
+    console.error('Batch upsert failed:', error.message)
+    return false
+  }
+
+  // Sync real IDs back into local state
+  if (data && data.length > 0) {
+    set((state) => {
+      const next = { ...state.inventory }
+      for (const row of data) next[row.color_code] = row
+      return { inventory: next }
+    })
+  }
+  return true
+}
+
 export const useInventoryStore = create<InventoryState>((set, get) => ({
   inventory: {},
   loading: false,
@@ -140,50 +179,41 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
     )
     if (targets.length === 0) return
 
-    // Save undo snapshot
+    const label = seriesFilter ? seriesFilter.join('/') + ' 系列' : '全部颜色'
     const snapshot: UndoSnapshot = {
       quantities: Object.fromEntries(targets.map((i) => [i.color_code, i.quantity])),
-      description: delta > 0
-        ? `+${delta} 粒（${seriesFilter ? seriesFilter.join('/') + ' 系列' : '全部颜色'}，共 ${targets.length} 色）`
-        : `${delta} 粒（${seriesFilter ? seriesFilter.join('/') + ' 系列' : '全部颜色'}，共 ${targets.length} 色）`,
+      description: `${delta > 0 ? '+' : ''}${delta} 粒（${label}，共 ${targets.length} 色）`,
       timestamp: new Date().toISOString(),
     }
-
     const updatedItems = targets.map((item) => ({
       ...item,
       quantity: Math.max(0, item.quantity + delta),
       updated_at: new Date().toISOString(),
     }))
 
-    // Optimistic update
+    // Optimistic update + push undo snapshot
     set((state) => {
       const next = { ...state.inventory }
       for (const item of updatedItems) next[item.color_code] = item
-      return {
-        inventory: next,
-        undoStack: [snapshot, ...state.undoStack].slice(0, MAX_UNDO),
-      }
+      return { inventory: next, undoStack: [snapshot, ...state.undoStack].slice(0, MAX_UNDO) }
     })
 
-    // Batch upsert to Supabase
-    await supabase.from('inventory').upsert(
-      updatedItems.map((i) => ({
-        id: i.id || undefined,
-        user_id: userId,
-        color_code: i.color_code,
-        quantity: i.quantity,
-        low_threshold: i.low_threshold ?? 50,
-        updated_at: i.updated_at,
-      })),
-      { onConflict: 'user_id,color_code' }
-    )
+    const ok = await doBatchUpsert(updatedItems, userId, set)
+    if (!ok) {
+      // Revert optimistic update
+      set((state) => {
+        const next = { ...state.inventory }
+        for (const [code, qty] of Object.entries(snapshot.quantities)) {
+          next[code] = { ...next[code], quantity: qty }
+        }
+        return { inventory: next, undoStack: state.undoStack.slice(1) }
+      })
+      return
+    }
 
     const record: OperationRecord = {
-      id: makeId(),
-      description: snapshot.description,
-      timestamp: snapshot.timestamp,
-      affectedColors: targets.length,
-      delta,
+      id: makeId(), description: snapshot.description,
+      timestamp: snapshot.timestamp, affectedColors: targets.length, delta,
     }
     const newHistory = [record, ...get().history].slice(0, MAX_HISTORY)
     set({ history: newHistory })
@@ -198,46 +228,37 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
     if (targets.length === 0) return
 
     const safeQty = Math.max(0, quantity)
-
+    const label = seriesFilter ? seriesFilter.join('/') + ' 系列' : '全部颜色'
     const snapshot: UndoSnapshot = {
       quantities: Object.fromEntries(targets.map((i) => [i.color_code, i.quantity])),
-      description: `设为 ${safeQty} 粒（${seriesFilter ? seriesFilter.join('/') + ' 系列' : '全部颜色'}，共 ${targets.length} 色）`,
+      description: `设为 ${safeQty} 粒（${label}，共 ${targets.length} 色）`,
       timestamp: new Date().toISOString(),
     }
-
     const updatedItems = targets.map((item) => ({
-      ...item,
-      quantity: safeQty,
-      updated_at: new Date().toISOString(),
+      ...item, quantity: safeQty, updated_at: new Date().toISOString(),
     }))
 
     set((state) => {
       const next = { ...state.inventory }
       for (const item of updatedItems) next[item.color_code] = item
-      return {
-        inventory: next,
-        undoStack: [snapshot, ...state.undoStack].slice(0, MAX_UNDO),
-      }
+      return { inventory: next, undoStack: [snapshot, ...state.undoStack].slice(0, MAX_UNDO) }
     })
 
-    await supabase.from('inventory').upsert(
-      updatedItems.map((i) => ({
-        id: i.id || undefined,
-        user_id: userId,
-        color_code: i.color_code,
-        quantity: safeQty,
-        low_threshold: i.low_threshold ?? 50,
-        updated_at: i.updated_at,
-      })),
-      { onConflict: 'user_id,color_code' }
-    )
+    const ok = await doBatchUpsert(updatedItems, userId, set)
+    if (!ok) {
+      set((state) => {
+        const next = { ...state.inventory }
+        for (const [code, qty] of Object.entries(snapshot.quantities)) {
+          next[code] = { ...next[code], quantity: qty }
+        }
+        return { inventory: next, undoStack: state.undoStack.slice(1) }
+      })
+      return
+    }
 
     const record: OperationRecord = {
-      id: makeId(),
-      description: snapshot.description,
-      timestamp: snapshot.timestamp,
-      affectedColors: targets.length,
-      delta: null,
+      id: makeId(), description: snapshot.description,
+      timestamp: snapshot.timestamp, affectedColors: targets.length, delta: null,
     }
     const newHistory = [record, ...get().history].slice(0, MAX_HISTORY)
     set({ history: newHistory })
@@ -254,25 +275,21 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
       color_code: colorCode,
       quantity,
       updated_at: new Date().toISOString(),
-    }))
+    })) as InventoryItem[]
 
+    // Optimistic restore
     set((state) => {
       const next = { ...state.inventory }
       for (const item of restoredItems) next[item.color_code] = { ...next[item.color_code], ...item }
       return { inventory: next, undoStack: rest }
     })
 
-    await supabase.from('inventory').upsert(
-      restoredItems.map((i) => ({
-        id: i.id || undefined,
-        user_id: userId,
-        color_code: i.color_code,
-        quantity: i.quantity,
-        low_threshold: (i as InventoryItem).low_threshold ?? 50,
-        updated_at: i.updated_at,
-      })),
-      { onConflict: 'user_id,color_code' }
-    )
+    const ok = await doBatchUpsert(restoredItems, userId, set)
+    if (!ok) {
+      // Re-push snapshot back if undo itself failed
+      set((state) => ({ undoStack: [top, ...state.undoStack] }))
+      return false
+    }
 
     const record: OperationRecord = {
       id: makeId(),

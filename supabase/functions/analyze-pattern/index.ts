@@ -1,152 +1,154 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-const corsHeaders = {
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
+// Check openrouter.ai/models for the latest Gemini Flash model ID
+const MODEL = 'google/gemini-3-flash'
+
+const cors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...cors, 'Content-Type': 'application/json' },
+  })
+}
+
 Deno.serve(async (req: Request) => {
-  // Handle CORS preflight
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
 
   try {
-    // Validate authorization
+    // 1. Verify user JWT
     const authHeader = req.headers.get('Authorization')
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: 'Missing authorization header' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
-    }
+    if (!authHeader) return json({ error: 'Missing Authorization header' }, 401)
 
-    // Verify user JWT via Supabase
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-    const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
-    const supabase = createClient(supabaseUrl, supabaseKey, {
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!
+    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     })
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+    const { data: { user }, error: authErr } = await supabase.auth.getUser()
+    if (authErr || !user) return json({ error: 'Unauthorized' }, 401)
+
+    // 2. Read user's OpenRouter API key from user_settings
+    const { data: settingsRow, error: settingsErr } = await supabase
+      .from('user_settings')
+      .select('openrouter_api_key')
+      .eq('user_id', user.id)
+      .maybeSingle()
+
+    if (settingsErr) return json({ error: 'Failed to read settings' }, 500)
+
+    const openrouterKey = settingsRow?.openrouter_api_key
+    if (!openrouterKey) {
+      return json({
+        error: '未设置 OpenRouter API Key，请先在「设置」页面中添加你的 API Key。',
+        code: 'NO_API_KEY',
+      }, 400)
     }
 
-    // Parse request body
-    const { imageUrl } = await req.json()
-    if (!imageUrl) {
-      return new Response(JSON.stringify({ error: 'Missing imageUrl in request body' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+    // 3. Parse request body
+    const { imageUrls } = await req.json() as { imageUrls: string[] }
+    if (!imageUrls || imageUrls.length === 0) {
+      return json({ error: 'Missing imageUrls' }, 400)
     }
 
-    // Get GitHub token for Azure inference API
-    const githubToken = Deno.env.get('GITHUB_TOKEN')
-    if (!githubToken) {
-      return new Response(JSON.stringify({ error: 'GITHUB_TOKEN not configured' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
-    }
+    // 4. Build message content with all images + instruction
+    // Gemini supports multiple images in one message
+    const imageContent = imageUrls.map((url) => ({
+      type: 'image_url',
+      image_url: { url },
+    }))
 
-    // Call Azure OpenAI inference endpoint (GitHub Models)
-    const aiResponse = await fetch('https://models.inference.ai.azure.com/chat/completions', {
+    const prompt = imageUrls.length === 1
+      ? '请分析这张拼豆图纸，列出所有需要的颜色色号和每种颜色的数量。'
+      : `请分析这 ${imageUrls.length} 张拼豆图纸，统计所有图纸合计需要的颜色色号和数量（相同色号的数量相加）。`
+
+    const messages = [
+      {
+        role: 'system',
+        content: `你是拼豆图纸分析助手。分析图纸中每种颜色对应的拼豆色号和数量。
+色号格式：字母+数字，有效系列为 A(1-26)、B(1-32)、C(1-29)、D(1-26)、E(1-24)、F(1-25)、G(1-21)、H(1-23)、M(1-15)。
+只返回 JSON 数组，不要包含任何其他文字、注释或 Markdown 代码块。
+格式：[{"color_code":"A1","quantity":120},{"color_code":"B3","quantity":45}]`,
+      },
+      {
+        role: 'user',
+        content: [
+          ...imageContent,
+          { type: 'text', text: prompt },
+        ],
+      },
+    ]
+
+    // 5. Call OpenRouter
+    const aiRes = await fetch(OPENROUTER_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${githubToken}`,
+        'Authorization': `Bearer ${openrouterKey}`,
+        'HTTP-Referer': supabaseUrl,
+        'X-Title': 'PINDOU App',
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [
-          {
-            role: 'system',
-            content:
-              '你是拼豆分析助手。分析图纸，返回所有颜色的色号和数量。只返回JSON数组，格式：[{"color_code":"A1","quantity":50}]，不要其他文字。色号格式为字母+数字，有效系列为A(1-26)、B(1-32)、C(1-29)、D(1-26)、E(1-24)、F(1-25)、G(1-21)、H(1-23)、M(1-15)。',
-          },
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'image_url',
-                image_url: { url: imageUrl },
-              },
-              {
-                type: 'text',
-                text: '请分析这张拼豆图纸，列出所有需要的颜色色号和数量。',
-              },
-            ],
-          },
-        ],
-        max_tokens: 2000,
+        model: MODEL,
+        messages,
         temperature: 0.1,
+        max_tokens: 4000,
       }),
     })
 
-    if (!aiResponse.ok) {
-      const errText = await aiResponse.text()
-      console.error('AI API error:', errText)
-      return new Response(JSON.stringify({ error: `AI analysis failed: ${aiResponse.statusText}` }), {
-        status: 502,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+    if (!aiRes.ok) {
+      const errText = await aiRes.text()
+      console.error('OpenRouter error:', errText)
+      // Surface meaningful errors to the user
+      if (aiRes.status === 401) return json({ error: 'API Key 无效，请在设置中检查你的 OpenRouter Key。' }, 400)
+      if (aiRes.status === 402) return json({ error: 'OpenRouter 账户余额不足，请前往 openrouter.ai 充值。' }, 400)
+      if (aiRes.status === 429) return json({ error: '请求过于频繁，请稍后再试。' }, 429)
+      return json({ error: `AI 服务错误 (${aiRes.status})：${errText.slice(0, 200)}` }, 502)
     }
 
-    const aiData = await aiResponse.json()
-    const content = aiData.choices?.[0]?.message?.content ?? ''
+    const aiData = await aiRes.json()
+    const content: string = aiData.choices?.[0]?.message?.content ?? ''
 
-    // Parse the JSON array from the response
-    let parsed: { color_code: string; quantity: number }[] = []
-
-    // Extract JSON array from response (handle potential markdown code blocks)
-    const jsonMatch = content.match(/\[[\s\S]*\]/)
-    if (jsonMatch) {
-      try {
-        parsed = JSON.parse(jsonMatch[0])
-      } catch (parseErr) {
-        console.error('Failed to parse AI response as JSON:', content, parseErr)
-        return new Response(
-          JSON.stringify({ error: 'Failed to parse AI response', raw: content }),
-          {
-            status: 500,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          }
-        )
-      }
-    } else {
-      return new Response(
-        JSON.stringify({ error: 'AI did not return a valid JSON array', raw: content }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
-      )
+    // 6. Parse JSON from response (handle potential markdown fences)
+    const cleaned = content.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+    const jsonMatch = cleaned.match(/\[[\s\S]*\]/)
+    if (!jsonMatch) {
+      console.error('No JSON array in response:', content)
+      return json({ error: `AI 返回了无法解析的内容：${content.slice(0, 300)}` }, 500)
     }
 
-    // Validate and sanitize results
-    const validCodes = /^[A-HM]\d{1,2}$/
-    const results = parsed
-      .filter((item) => item.color_code && validCodes.test(item.color_code) && item.quantity > 0)
-      .map((item) => ({
-        color_code: item.color_code,
-        quantity: Math.round(item.quantity),
-      }))
+    let parsed: { color_code: string; quantity: number }[]
+    try {
+      parsed = JSON.parse(jsonMatch[0])
+    } catch (e) {
+      return json({ error: '解析 AI 返回数据失败，请重试。' }, 500)
+    }
 
-    return new Response(JSON.stringify(results), {
-      status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+    // 7. Validate, deduplicate (sum same color codes), and sanitize
+    const validCode = /^[A-HM]\d{1,2}$/
+    const merged: Record<string, number> = {}
+    for (const item of parsed) {
+      if (!item.color_code || !validCode.test(item.color_code)) continue
+      const qty = Math.round(Math.abs(item.quantity || 0))
+      if (qty <= 0) continue
+      merged[item.color_code] = (merged[item.color_code] ?? 0) + qty
+    }
+
+    const results = Object.entries(merged).map(([color_code, quantity]) => ({ color_code, quantity }))
+
+    if (results.length === 0) {
+      return json({ error: 'AI 未能识别出任何有效色号，请确认上传的是拼豆图纸。' }, 422)
+    }
+
+    return json(results)
   } catch (err) {
     console.error('Unhandled error:', err)
-    return new Response(JSON.stringify({ error: 'Internal server error' }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+    return json({ error: '服务器内部错误，请重试。' }, 500)
   }
 })
