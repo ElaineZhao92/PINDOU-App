@@ -2,19 +2,62 @@ import { create } from 'zustand'
 import { supabase } from '../lib/supabase'
 import { InventoryItem } from '../lib/types'
 
+export interface OperationRecord {
+  id: string
+  description: string
+  timestamp: string
+  affectedColors: number
+  delta: number | null  // null = "set to" operation
+}
+
+interface UndoSnapshot {
+  quantities: Record<string, number>
+  description: string
+  timestamp: string
+}
+
 interface InventoryState {
   inventory: Record<string, InventoryItem>
   loading: boolean
+  undoStack: UndoSnapshot[]
+  history: OperationRecord[]
+
   fetchInventory: (userId: string) => Promise<void>
   updateQuantity: (colorCode: string, delta: number, userId: string) => Promise<void>
   setQuantity: (colorCode: string, quantity: number, userId: string) => Promise<void>
+  bulkUpdateQuantity: (delta: number, userId: string, seriesFilter: string[] | null) => Promise<void>
+  bulkSetQuantity: (quantity: number, userId: string, seriesFilter: string[] | null) => Promise<void>
+  undo: (userId: string) => Promise<boolean>
+  clearHistory: () => void
   getLowStockItems: (threshold?: number) => InventoryItem[]
   getByCode: (code: string) => InventoryItem | null
+}
+
+const HISTORY_KEY = 'pindou_op_history'
+const MAX_UNDO = 5
+const MAX_HISTORY = 50
+
+function loadHistory(): OperationRecord[] {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]')
+  } catch {
+    return []
+  }
+}
+
+function saveHistory(history: OperationRecord[]) {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)))
+}
+
+function makeId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
 }
 
 export const useInventoryStore = create<InventoryState>((set, get) => ({
   inventory: {},
   loading: false,
+  undoStack: [],
+  history: loadHistory(),
 
   fetchInventory: async (userId: string) => {
     set({ loading: true })
@@ -30,8 +73,6 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
       const beadColors = await beadColorsRes.json()
 
       const inventoryMap: Record<string, InventoryItem> = {}
-
-      // Initialize all colors with 0 quantity
       for (const color of beadColors) {
         inventoryMap[color.code] = {
           id: '',
@@ -42,14 +83,11 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
           updated_at: new Date().toISOString(),
         }
       }
-
-      // Overlay with actual data from Supabase
       if (data) {
         for (const item of data) {
           inventoryMap[item.color_code] = item
         }
       }
-
       set({ inventory: inventoryMap })
     } finally {
       set({ loading: false })
@@ -59,83 +97,206 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
   updateQuantity: async (colorCode: string, delta: number, userId: string) => {
     const current = get().inventory[colorCode]
     if (!current) return
-
-    const newQuantity = Math.max(0, current.quantity + delta)
-    await get().setQuantity(colorCode, newQuantity, userId)
+    await get().setQuantity(colorCode, Math.max(0, current.quantity + delta), userId)
   },
 
   setQuantity: async (colorCode: string, quantity: number, userId: string) => {
     const current = get().inventory[colorCode]
     const safeQty = Math.max(0, quantity)
 
-    // Optimistic update
     set((state) => ({
       inventory: {
         ...state.inventory,
-        [colorCode]: {
-          ...state.inventory[colorCode],
-          quantity: safeQty,
-          updated_at: new Date().toISOString(),
-        },
+        [colorCode]: { ...state.inventory[colorCode], quantity: safeQty, updated_at: new Date().toISOString() },
       },
     }))
 
     if (current?.id) {
-      // Update existing record
       const { error } = await supabase
         .from('inventory')
         .update({ quantity: safeQty, updated_at: new Date().toISOString() })
         .eq('id', current.id)
-
       if (error) {
-        // Revert optimistic update on error
-        set((state) => ({
-          inventory: {
-            ...state.inventory,
-            [colorCode]: current,
-          },
-        }))
+        set((state) => ({ inventory: { ...state.inventory, [colorCode]: current } }))
       }
     } else {
-      // Insert new record
       const { data, error } = await supabase
         .from('inventory')
-        .insert({
-          user_id: userId,
-          color_code: colorCode,
-          quantity: safeQty,
-          low_threshold: 50,
-        })
+        .insert({ user_id: userId, color_code: colorCode, quantity: safeQty, low_threshold: 50 })
         .select()
         .single()
-
       if (error) {
-        // Revert
-        set((state) => ({
-          inventory: {
-            ...state.inventory,
-            [colorCode]: current,
-          },
-        }))
+        set((state) => ({ inventory: { ...state.inventory, [colorCode]: current } }))
       } else if (data) {
-        set((state) => ({
-          inventory: {
-            ...state.inventory,
-            [colorCode]: data,
-          },
-        }))
+        set((state) => ({ inventory: { ...state.inventory, [colorCode]: data } }))
       }
     }
   },
 
-  getLowStockItems: (threshold?: number) => {
+  bulkUpdateQuantity: async (delta: number, userId: string, seriesFilter: string[] | null) => {
     const { inventory } = get()
-    return Object.values(inventory).filter(
-      (item) => item.quantity < (threshold ?? item.low_threshold ?? 50)
+    const targets = Object.values(inventory).filter(
+      (item) => !seriesFilter || seriesFilter.includes(item.color_code.replace(/\d+$/, ''))
+    )
+    if (targets.length === 0) return
+
+    // Save undo snapshot
+    const snapshot: UndoSnapshot = {
+      quantities: Object.fromEntries(targets.map((i) => [i.color_code, i.quantity])),
+      description: delta > 0
+        ? `+${delta} 粒（${seriesFilter ? seriesFilter.join('/') + ' 系列' : '全部颜色'}，共 ${targets.length} 色）`
+        : `${delta} 粒（${seriesFilter ? seriesFilter.join('/') + ' 系列' : '全部颜色'}，共 ${targets.length} 色）`,
+      timestamp: new Date().toISOString(),
+    }
+
+    const updatedItems = targets.map((item) => ({
+      ...item,
+      quantity: Math.max(0, item.quantity + delta),
+      updated_at: new Date().toISOString(),
+    }))
+
+    // Optimistic update
+    set((state) => {
+      const next = { ...state.inventory }
+      for (const item of updatedItems) next[item.color_code] = item
+      return {
+        inventory: next,
+        undoStack: [snapshot, ...state.undoStack].slice(0, MAX_UNDO),
+      }
+    })
+
+    // Batch upsert to Supabase
+    await supabase.from('inventory').upsert(
+      updatedItems.map((i) => ({
+        id: i.id || undefined,
+        user_id: userId,
+        color_code: i.color_code,
+        quantity: i.quantity,
+        low_threshold: i.low_threshold ?? 50,
+        updated_at: i.updated_at,
+      })),
+      { onConflict: 'user_id,color_code' }
+    )
+
+    const record: OperationRecord = {
+      id: makeId(),
+      description: snapshot.description,
+      timestamp: snapshot.timestamp,
+      affectedColors: targets.length,
+      delta,
+    }
+    const newHistory = [record, ...get().history].slice(0, MAX_HISTORY)
+    set({ history: newHistory })
+    saveHistory(newHistory)
+  },
+
+  bulkSetQuantity: async (quantity: number, userId: string, seriesFilter: string[] | null) => {
+    const { inventory } = get()
+    const targets = Object.values(inventory).filter(
+      (item) => !seriesFilter || seriesFilter.includes(item.color_code.replace(/\d+$/, ''))
+    )
+    if (targets.length === 0) return
+
+    const safeQty = Math.max(0, quantity)
+
+    const snapshot: UndoSnapshot = {
+      quantities: Object.fromEntries(targets.map((i) => [i.color_code, i.quantity])),
+      description: `设为 ${safeQty} 粒（${seriesFilter ? seriesFilter.join('/') + ' 系列' : '全部颜色'}，共 ${targets.length} 色）`,
+      timestamp: new Date().toISOString(),
+    }
+
+    const updatedItems = targets.map((item) => ({
+      ...item,
+      quantity: safeQty,
+      updated_at: new Date().toISOString(),
+    }))
+
+    set((state) => {
+      const next = { ...state.inventory }
+      for (const item of updatedItems) next[item.color_code] = item
+      return {
+        inventory: next,
+        undoStack: [snapshot, ...state.undoStack].slice(0, MAX_UNDO),
+      }
+    })
+
+    await supabase.from('inventory').upsert(
+      updatedItems.map((i) => ({
+        id: i.id || undefined,
+        user_id: userId,
+        color_code: i.color_code,
+        quantity: safeQty,
+        low_threshold: i.low_threshold ?? 50,
+        updated_at: i.updated_at,
+      })),
+      { onConflict: 'user_id,color_code' }
+    )
+
+    const record: OperationRecord = {
+      id: makeId(),
+      description: snapshot.description,
+      timestamp: snapshot.timestamp,
+      affectedColors: targets.length,
+      delta: null,
+    }
+    const newHistory = [record, ...get().history].slice(0, MAX_HISTORY)
+    set({ history: newHistory })
+    saveHistory(newHistory)
+  },
+
+  undo: async (userId: string) => {
+    const { undoStack } = get()
+    if (undoStack.length === 0) return false
+
+    const [top, ...rest] = undoStack
+    const restoredItems = Object.entries(top.quantities).map(([colorCode, quantity]) => ({
+      ...(get().inventory[colorCode] ?? {}),
+      color_code: colorCode,
+      quantity,
+      updated_at: new Date().toISOString(),
+    }))
+
+    set((state) => {
+      const next = { ...state.inventory }
+      for (const item of restoredItems) next[item.color_code] = { ...next[item.color_code], ...item }
+      return { inventory: next, undoStack: rest }
+    })
+
+    await supabase.from('inventory').upsert(
+      restoredItems.map((i) => ({
+        id: i.id || undefined,
+        user_id: userId,
+        color_code: i.color_code,
+        quantity: i.quantity,
+        low_threshold: (i as InventoryItem).low_threshold ?? 50,
+        updated_at: i.updated_at,
+      })),
+      { onConflict: 'user_id,color_code' }
+    )
+
+    const record: OperationRecord = {
+      id: makeId(),
+      description: `↩ 撤销：${top.description}`,
+      timestamp: new Date().toISOString(),
+      affectedColors: Object.keys(top.quantities).length,
+      delta: null,
+    }
+    const newHistory = [record, ...get().history].slice(0, MAX_HISTORY)
+    set({ history: newHistory })
+    saveHistory(newHistory)
+    return true
+  },
+
+  clearHistory: () => {
+    set({ history: [] })
+    localStorage.removeItem(HISTORY_KEY)
+  },
+
+  getLowStockItems: (threshold?: number) => {
+    return Object.values(get().inventory).filter(
+      (item) => item.quantity > 0 && item.quantity < (threshold ?? item.low_threshold ?? 50)
     )
   },
 
-  getByCode: (code: string) => {
-    return get().inventory[code] ?? null
-  },
+  getByCode: (code: string) => get().inventory[code] ?? null,
 }))

@@ -4,34 +4,29 @@ import { useAuthStore } from '../store/authStore'
 
 export function useInventory() {
   const { user } = useAuthStore()
-  const { inventory, loading, fetchInventory, updateQuantity, setQuantity, getLowStockItems, getByCode } =
-    useInventoryStore()
+  const store = useInventoryStore()
 
   useEffect(() => {
-    if (user?.id) {
-      fetchInventory(user.id)
-    }
-  }, [user?.id, fetchInventory])
-
-  const handleUpdateQuantity = (colorCode: string, delta: number) => {
-    if (user?.id) {
-      updateQuantity(colorCode, delta, user.id)
-    }
-  }
-
-  const handleSetQuantity = (colorCode: string, quantity: number) => {
-    if (user?.id) {
-      setQuantity(colorCode, quantity, user.id)
-    }
-  }
+    if (user?.id) store.fetchInventory(user.id)
+  }, [user?.id])
 
   return {
-    inventory,
-    loading,
-    updateQuantity: handleUpdateQuantity,
-    setQuantity: handleSetQuantity,
-    getLowStockItems,
-    getByCode,
-    refetch: () => user?.id && fetchInventory(user.id),
+    inventory: store.inventory,
+    loading: store.loading,
+    undoStack: store.undoStack,
+    history: store.history,
+    updateQuantity: (colorCode: string, delta: number) =>
+      user?.id && store.updateQuantity(colorCode, delta, user.id),
+    setQuantity: (colorCode: string, quantity: number) =>
+      user?.id && store.setQuantity(colorCode, quantity, user.id),
+    bulkUpdateQuantity: (delta: number, seriesFilter: string[] | null) =>
+      user?.id ? store.bulkUpdateQuantity(delta, user.id, seriesFilter) : Promise.resolve(),
+    bulkSetQuantity: (quantity: number, seriesFilter: string[] | null) =>
+      user?.id ? store.bulkSetQuantity(quantity, user.id, seriesFilter) : Promise.resolve(),
+    undo: () => user?.id ? store.undo(user.id) : Promise.resolve(false),
+    clearHistory: store.clearHistory,
+    getLowStockItems: store.getLowStockItems,
+    getByCode: store.getByCode,
+    refetch: () => user?.id && store.fetchInventory(user.id),
   }
 }
