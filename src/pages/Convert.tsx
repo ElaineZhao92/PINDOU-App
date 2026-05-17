@@ -173,7 +173,7 @@ export default function Convert({ showToast }: ConvertProps) {
     : { w: PRESETS[presetIdx].w, h: PRESETS[presetIdx].h }
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">拼豆图纸生成</h1>
         <p className="text-gray-500 text-sm mt-1">

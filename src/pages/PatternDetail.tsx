@@ -17,6 +17,7 @@ export default function PatternDetail({ showToast }: PatternDetailProps) {
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [downloading, setDownloading] = useState(false)
 
   useEffect(() => {
     fetch('./bead-colors.json')
@@ -49,6 +50,27 @@ export default function PatternDetail({ showToast }: PatternDetailProps) {
 
   const getColorName = (code: string) => {
     return beadColors.find((c) => c.code === code)?.name ?? ''
+  }
+
+  const handleDownloadImage = async () => {
+    if (!pattern?.image_url) return
+    setDownloading(true)
+    try {
+      const res = await fetch(pattern.image_url)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${pattern.name}.png`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch {
+      window.open(pattern.image_url, '_blank')
+    } finally {
+      setDownloading(false)
+    }
   }
 
   const handleToggleStatus = async () => {
@@ -155,6 +177,22 @@ export default function PatternDetail({ showToast }: PatternDetailProps) {
 
                 {/* Actions */}
                 <div className="flex flex-col gap-2 sm:flex-row">
+                  {pattern.image_url && (
+                    <button
+                      onClick={handleDownloadImage}
+                      disabled={downloading}
+                      className="px-4 py-2 rounded-xl text-sm font-semibold transition-colors bg-gray-100 text-gray-600 hover:bg-gray-200 flex items-center gap-1.5"
+                    >
+                      {downloading ? (
+                        <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                      )}
+                      下载图纸
+                    </button>
+                  )}
                   <button
                     onClick={handleToggleStatus}
                     className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${

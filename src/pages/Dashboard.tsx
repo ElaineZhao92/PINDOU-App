@@ -190,17 +190,17 @@ export default function Dashboard({ showToast: _showToast }: DashboardProps) {
       </div>
 
       {/* Quick actions */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-3 md:grid-cols-5 gap-3">
         <Link
-          to="/inventory"
+          to="/convert"
           className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 hover:shadow-md transition-all hover:-translate-y-0.5 flex flex-col items-center gap-2 text-center"
         >
-          <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center">
-            <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+          <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center">
+            <svg className="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
           </div>
-          <span className="text-sm font-medium text-gray-700">更新库存</span>
+          <span className="text-sm font-medium text-gray-700">生成图纸</span>
         </Link>
         <Link
           to="/analyze"
@@ -211,7 +211,18 @@ export default function Dashboard({ showToast: _showToast }: DashboardProps) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
             </svg>
           </div>
-          <span className="text-sm font-medium text-gray-700">分析图纸</span>
+          <span className="text-sm font-medium text-gray-700">导入图纸</span>
+        </Link>
+        <Link
+          to="/inventory"
+          className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 hover:shadow-md transition-all hover:-translate-y-0.5 flex flex-col items-center gap-2 text-center"
+        >
+          <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center">
+            <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+            </svg>
+          </div>
+          <span className="text-sm font-medium text-gray-700">豆子库存</span>
         </Link>
         <Link
           to="/archive"
