@@ -148,6 +148,65 @@ export function renderBeadGrid(
   }
 }
 
+/** Cell size used for the labeled export image (download + archive). */
+export const EXPORT_CELL_SIZE = 24
+
+/**
+ * Draw the bead grid with color-code labels in each cell.
+ * Used for download and archive saves so the pattern is self-documenting.
+ */
+export function renderBeadGridLabeled(
+  canvas: HTMLCanvasElement,
+  grid: BeadCell[][],
+  cellSize: number = EXPORT_CELL_SIZE,
+): void {
+  const h = grid.length
+  const w = grid[0]?.length ?? 0
+  canvas.width = w * cellSize
+  canvas.height = h * cellSize
+  const ctx = canvas.getContext('2d')!
+
+  // Colored cell fill
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      ctx.fillStyle = grid[y][x].hex
+      ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize)
+    }
+  }
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)'
+  ctx.lineWidth = 0.5
+  ctx.beginPath()
+  for (let x = 0; x <= w; x++) {
+    ctx.moveTo(x * cellSize, 0)
+    ctx.lineTo(x * cellSize, h * cellSize)
+  }
+  for (let y = 0; y <= h; y++) {
+    ctx.moveTo(0, y * cellSize)
+    ctx.lineTo(w * cellSize, y * cellSize)
+  }
+  ctx.stroke()
+
+  // Color-code labels centered in each cell
+  const fontSize = Math.max(5, Math.floor(cellSize * 0.35))
+  ctx.font = `bold ${fontSize}px Arial, sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const { hex, code } = grid[y][x]
+      const r = parseInt(hex.slice(1, 3), 16)
+      const g = parseInt(hex.slice(3, 5), 16)
+      const b = parseInt(hex.slice(5, 7), 16)
+      const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+      ctx.fillStyle = lum < 0.5 ? 'rgba(255,255,255,0.92)' : 'rgba(0,0,0,0.72)'
+      ctx.fillText(code, x * cellSize + cellSize / 2, y * cellSize + cellSize / 2)
+    }
+  }
+}
+
 /** Calculate grid dimensions that maintain the image aspect ratio. */
 export function calcAspectGrid(
   imgW: number,

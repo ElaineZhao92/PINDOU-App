@@ -241,7 +241,7 @@ export default function Settings({ showToast }: SettingsProps) {
         <h2 className="font-bold text-gray-900 mb-4">关于应用</h2>
         <div className="space-y-2 text-sm">
           {[
-            ['应用名称', '我勒个豆 · PINDOU'],
+            ['应用名称', '我嘞个豆 · PINDOU'],
             ['版本', 'v0.2.0'],
             ['支持颜色数', '221 种（A-H + M 系列）'],
             ['AI 模型', 'Google Gemini 3.0 Flash（via OpenRouter）'],

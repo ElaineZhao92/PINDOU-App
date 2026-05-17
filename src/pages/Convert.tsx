@@ -3,7 +3,7 @@ import { useDropzone } from 'react-dropzone'
 import { supabase } from '../lib/supabase'
 import { useAuthStore } from '../store/authStore'
 import { usePatterns } from '../hooks/usePatterns'
-import { BeadColorEntry, ConversionResult, convertToBeads, renderBeadGrid, calcAspectGrid } from '../lib/imageToBeads'
+import { BeadColorEntry, ConversionResult, convertToBeads, renderBeadGrid, renderBeadGridLabeled, calcAspectGrid } from '../lib/imageToBeads'
 import { Toast } from '../lib/types'
 
 interface ConvertProps {
@@ -103,12 +103,26 @@ export default function Convert({ showToast }: ConvertProps) {
     renderBeadGrid(canvasRef.current, result.grid, cellSize)
   }, [result])
 
-  const handleDownload = () => {
-    if (!canvasRef.current || !result) return
-    const link = document.createElement('a')
-    link.download = `${patternName || '拼豆图纸'}_${result.width}x${result.height}.png`
-    link.href = canvasRef.current.toDataURL('image/png')
-    link.click()
+  // Build the labeled export canvas (24px/cell with color codes) as a Blob
+  const buildLabeledBlob = (): Promise<Blob | null> => {
+    if (!result) return Promise.resolve(null)
+    const exportCanvas = document.createElement('canvas')
+    renderBeadGridLabeled(exportCanvas, result.grid)
+    return new Promise(resolve => exportCanvas.toBlob(resolve, 'image/png'))
+  }
+
+  const handleDownload = async () => {
+    if (!result) return
+    const blob = await buildLabeledBlob()
+    if (!blob) return
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${patternName || '拼豆图纸'}_${result.width}x${result.height}.png`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
   const handleSave = async () => {
@@ -116,14 +130,14 @@ export default function Convert({ showToast }: ConvertProps) {
     if (!result || !user) return
     setSaving(true)
     try {
-      // Upload original image to storage
+      // Upload the labeled pattern image (not the original photo)
       let storageUrl: string | null = null
-      if (imageFile) {
-        const ext = imageFile.name.split('.').pop()
-        const path = `${user.id}/convert_${Date.now()}.${ext}`
+      const blob = await buildLabeledBlob()
+      if (blob) {
+        const path = `${user.id}/convert_${Date.now()}.png`
         const { data, error } = await supabase.storage
           .from('pattern-images')
-          .upload(path, imageFile, { upsert: true })
+          .upload(path, blob, { contentType: 'image/png', upsert: true })
         if (!error) {
           storageUrl = supabase.storage.from('pattern-images').getPublicUrl(data.path).data.publicUrl
         }
@@ -161,9 +175,9 @@ export default function Convert({ showToast }: ConvertProps) {
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">图片转图纸</h1>
+        <h1 className="text-2xl font-bold text-gray-900">拼豆图纸生成</h1>
         <p className="text-gray-500 text-sm mt-1">
-          上传任意图片，自动转换为拼豆配色图纸 · 纯本地算法，无需 API
+          上传任意图片，自动转换为拼豆配色图纸
         </p>
       </div>
 
@@ -294,7 +308,7 @@ export default function Convert({ showToast }: ConvertProps) {
                   d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
                 />
               </svg>
-              下载 PNG
+              下载图纸（含色号）
             </button>
           </div>
 

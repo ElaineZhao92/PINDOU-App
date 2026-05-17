@@ -141,7 +141,7 @@ export default function Inventory({ showToast }: InventoryProps) {
           <p className="text-xl font-black text-orange-500">{loading ? '…' : lowStockItems.length}<span className="text-xs font-normal text-gray-400 ml-1">种</span></p>
         </div>
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-3">
-          <p className="text-xs text-gray-400">总珠珠数</p>
+          <p className="text-xs text-gray-400">总豆子数</p>
           <p className="text-xl font-black text-gray-900">
             {loading ? '…' : totalBeads >= 10000 ? `${(totalBeads/10000).toFixed(1)}w` : totalBeads}
             <span className="text-xs font-normal text-gray-400 ml-1">颗</span>

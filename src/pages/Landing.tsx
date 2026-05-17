@@ -32,7 +32,7 @@ export default function Landing() {
           <div className="w-9 h-9 bg-primary rounded-xl flex items-center justify-center shadow-sm">
             <span className="text-white font-bold text-base">豆</span>
           </div>
-          <span className="font-bold text-gray-800 text-xl">我勒个豆</span>
+          <span className="font-bold text-gray-800 text-xl">我嘞个豆</span>
         </div>
         <Link
           to="/login"
@@ -57,7 +57,7 @@ export default function Landing() {
         </h1>
         <p className="text-lg md:text-xl text-gray-500 mb-10 max-w-2xl mx-auto leading-relaxed">
           专为拼豆爱好者设计的库存管理工具。AI分析图纸、智能预警补货、
-          轻松管理221种颜色珠珠的库存。
+          轻松管理221种颜色豆子的库存。
         </p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
           <Link
@@ -94,7 +94,7 @@ export default function Landing() {
       {/* Features */}
       <section id="features" className="max-w-6xl mx-auto px-6 pb-20">
         <h2 className="text-2xl md:text-3xl font-bold text-center text-gray-900 mb-12">
-          为什么选择我勒个豆？
+          为什么选择我嘞个豆？
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {features.map((f) => (
@@ -113,7 +113,7 @@ export default function Landing() {
       {/* CTA */}
       <section className="bg-primary py-16 px-6 text-center">
         <h2 className="text-2xl md:text-3xl font-bold text-white mb-4">
-          准备好开始管理你的珠珠了吗？
+          准备好开始管理你的豆子了吗？
         </h2>
         <p className="text-primary-100 mb-8 text-base">免费使用，立即开始</p>
         <Link
@@ -126,7 +126,7 @@ export default function Landing() {
 
       {/* Footer */}
       <footer className="py-8 text-center text-gray-400 text-sm">
-        <p>© 2024 我勒个豆 · PINDOU 拼豆库存管理</p>
+        <p>© 2024 我嘞个豆 · PINDOU 拼豆库存管理</p>
       </footer>
     </div>
   )

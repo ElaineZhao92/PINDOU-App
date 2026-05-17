@@ -62,7 +62,7 @@ export default function Login() {
             {isRegister ? '创建账号' : '欢迎回来'}
           </h1>
           <p className="mt-1 text-sm text-gray-500">
-            {isRegister ? '注册我勒个豆，开始管理你的珠珠' : '登录到你的珠珠库存管理'}
+            {isRegister ? '注册我嘞个豆，开始管理你的豆子' : '登录到你的豆子库存管理'}
           </p>
         </div>
 

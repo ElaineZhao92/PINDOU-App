@@ -57,7 +57,7 @@ export default function Dashboard({ showToast: _showToast }: DashboardProps) {
           }
         />
         <StatCard
-          label="总珠珠数"
+          label="总豆子数"
           value={invLoading ? '...' : totalBeads >= 10000 ? `${(totalBeads / 10000).toFixed(1)}w` : String(totalBeads)}
           unit="颗"
           color="bg-green-50 text-green-600"
