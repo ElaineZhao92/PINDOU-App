@@ -11,6 +11,7 @@ import Analyze from './pages/Analyze'
 import Archive from './pages/Archive'
 import PatternDetail from './pages/PatternDetail'
 import Settings from './pages/Settings'
+import Convert from './pages/Convert'
 import { Toast } from './lib/types'
 
 export const ToastContext = {
@@ -126,6 +127,16 @@ function App() {
             <ProtectedRoute>
               <Layout>
                 <Settings showToast={showToast} />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/convert"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <Convert showToast={showToast} />
               </Layout>
             </ProtectedRoute>
           }
