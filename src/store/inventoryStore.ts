@@ -136,24 +136,22 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
   updateQuantity: async (colorCode: string, delta: number, userId: string) => {
     const current = get().inventory[colorCode]
     if (!current) return
-    await get().setQuantity(colorCode, Math.max(0, current.quantity + delta), userId)
+    await get().setQuantity(colorCode, current.quantity + delta, userId)
   },
 
   setQuantity: async (colorCode: string, quantity: number, userId: string) => {
     const current = get().inventory[colorCode]
-    const safeQty = Math.max(0, quantity)
-
     set((state) => ({
       inventory: {
         ...state.inventory,
-        [colorCode]: { ...state.inventory[colorCode], quantity: safeQty, updated_at: new Date().toISOString() },
+        [colorCode]: { ...state.inventory[colorCode], quantity, updated_at: new Date().toISOString() },
       },
     }))
 
     if (current?.id) {
       const { error } = await supabase
         .from('inventory')
-        .update({ quantity: safeQty, updated_at: new Date().toISOString() })
+        .update({ quantity, updated_at: new Date().toISOString() })
         .eq('id', current.id)
       if (error) {
         set((state) => ({ inventory: { ...state.inventory, [colorCode]: current } }))
@@ -161,7 +159,7 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
     } else {
       const { data, error } = await supabase
         .from('inventory')
-        .insert({ user_id: userId, color_code: colorCode, quantity: safeQty, low_threshold: 50 })
+        .insert({ user_id: userId, color_code: colorCode, quantity, low_threshold: 50 })
         .select()
         .single()
       if (error) {

@@ -105,6 +105,64 @@ export function usePatterns() {
     return data ?? []
   }
 
+  const batchUpdateStatus = async (ids: string[], status: 'in_progress' | 'completed') => {
+    const { error } = await supabase
+      .from('patterns')
+      .update({ status, completed_at: status === 'completed' ? new Date().toISOString() : null })
+      .in('id', ids)
+    if (!error) {
+      setPatterns((prev) =>
+        prev.map((p) =>
+          ids.includes(p.id)
+            ? { ...p, status, completed_at: status === 'completed' ? new Date().toISOString() : null }
+            : p
+        )
+      )
+    }
+    return !error
+  }
+
+  const batchDelete = async (ids: string[]) => {
+    await supabase.from('pattern_beads').delete().in('pattern_id', ids)
+    const { error } = await supabase.from('patterns').delete().in('id', ids)
+    if (!error) {
+      setPatterns((prev) => prev.filter((p) => !ids.includes(p.id)))
+    }
+    return !error
+  }
+
+  const batchAddTag = async (ids: string[], tag: string) => {
+    const targets = patterns.filter((p) => ids.includes(p.id))
+    await Promise.all(
+      targets.map((p) => {
+        const newTags = p.tags?.includes(tag) ? p.tags : [...(p.tags ?? []), tag]
+        return supabase.from('patterns').update({ tags: newTags }).eq('id', p.id)
+      })
+    )
+    setPatterns((prev) =>
+      prev.map((p) =>
+        ids.includes(p.id) && !p.tags?.includes(tag)
+          ? { ...p, tags: [...(p.tags ?? []), tag] }
+          : p
+      )
+    )
+  }
+
+  const batchRemoveTag = async (ids: string[], tag: string) => {
+    const targets = patterns.filter((p) => ids.includes(p.id))
+    await Promise.all(
+      targets.map((p) => {
+        const newTags = (p.tags ?? []).filter((t) => t !== tag)
+        return supabase.from('patterns').update({ tags: newTags }).eq('id', p.id)
+      })
+    )
+    setPatterns((prev) =>
+      prev.map((p) =>
+        ids.includes(p.id) ? { ...p, tags: (p.tags ?? []).filter((t) => t !== tag) } : p
+      )
+    )
+  }
+
   return {
     patterns,
     loading,
@@ -113,5 +171,9 @@ export function usePatterns() {
     updatePatternStatus,
     deletePattern,
     getPatternBeads,
+    batchUpdateStatus,
+    batchDelete,
+    batchAddTag,
+    batchRemoveTag,
   }
 }

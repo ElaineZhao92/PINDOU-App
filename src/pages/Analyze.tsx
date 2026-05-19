@@ -222,7 +222,7 @@ export default function Analyze({ showToast }: AnalyzeProps) {
     try {
       for (const r of mergedResults) {
         const cur = inventory[r.color_code]?.quantity ?? 0
-        setQuantity(r.color_code, Math.max(0, cur - r.quantity))
+        setQuantity(r.color_code, cur - r.quantity)
       }
       showToast('库存已按合计用量扣除！', 'success')
     } finally {

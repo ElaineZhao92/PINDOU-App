@@ -76,7 +76,7 @@ export default function Settings({ showToast }: SettingsProps) {
     : ''
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">设置</h1>
         <p className="text-gray-500 text-sm mt-1">管理账号与偏好设置</p>
