@@ -4,6 +4,7 @@ import { BeadColor, InventoryItem } from '../lib/types'
 interface BeadColorCellProps {
   color: BeadColor
   item: InventoryItem | null
+  threshold: number
   onSetQuantity: (colorCode: string, quantity: number) => void
   onUpdateQuantity: (colorCode: string, delta: number) => void
 }
@@ -11,6 +12,7 @@ interface BeadColorCellProps {
 export default function BeadColorCell({
   color,
   item,
+  threshold,
   onSetQuantity,
   onUpdateQuantity,
 }: BeadColorCellProps) {
@@ -19,7 +21,6 @@ export default function BeadColorCell({
   const inputRef = useRef<HTMLInputElement>(null)
 
   const quantity = item?.quantity ?? 0
-  const threshold = item?.low_threshold ?? 50
   const isLow = quantity < threshold
 
   const isDark = isColorDark(color.hex)

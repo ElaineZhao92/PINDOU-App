@@ -309,7 +309,7 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
 
   getLowStockItems: (threshold?: number) => {
     return Object.values(get().inventory).filter(
-      (item) => item.quantity > 0 && item.quantity < (threshold ?? item.low_threshold ?? 50)
+      (item) => item.quantity < (threshold ?? item.low_threshold ?? 50)
     )
   },
 

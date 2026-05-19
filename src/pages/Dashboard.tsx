@@ -1,8 +1,9 @@
 import React from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
 import { useInventory } from '../hooks/useInventory'
 import { usePatterns } from '../hooks/usePatterns'
+import { useSettings } from '../hooks/useSettings'
 import { Toast } from '../lib/types'
 
 interface DashboardProps {
@@ -10,13 +11,15 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ showToast: _showToast }: DashboardProps) {
+  const navigate = useNavigate()
   const { user } = useAuthStore()
   const { inventory, loading: invLoading, getLowStockItems } = useInventory()
   const { patterns, loading: patLoading } = usePatterns()
+  const { settings } = useSettings()
 
   const username = user?.email?.split('@')[0] ?? '朋友'
-
-  const lowStockItems = getLowStockItems()
+  const globalThreshold = settings?.low_threshold_default ?? 50
+  const lowStockItems = getLowStockItems(globalThreshold)
   const totalColors = Object.values(inventory).filter((i) => i.quantity > 0).length
   const totalBeads = Object.values(inventory).reduce((sum, i) => sum + i.quantity, 0)
 
@@ -50,6 +53,7 @@ export default function Dashboard({ showToast: _showToast }: DashboardProps) {
           value={invLoading ? '...' : String(lowStockItems.length)}
           unit="种"
           color="bg-orange-50 text-orange-600"
+          onClick={() => navigate('/inventory?filter=low')}
           icon={
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -258,11 +262,15 @@ interface StatCardProps {
   unit: string
   color: string
   icon: React.ReactNode
+  onClick?: () => void
 }
 
-function StatCard({ label, value, unit, color, icon }: StatCardProps) {
+function StatCard({ label, value, unit, color, icon, onClick }: StatCardProps) {
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+    <div
+      onClick={onClick}
+      className={`bg-white rounded-2xl shadow-sm border border-gray-100 p-4 ${onClick ? 'cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all' : ''}`}
+    >
       <div className={`w-9 h-9 rounded-xl ${color} flex items-center justify-center mb-3`}>
         {icon}
       </div>

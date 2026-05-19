@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useInventory } from '../hooks/useInventory'
+import { useSettings } from '../hooks/useSettings'
 import BeadColorCell from '../components/BeadColorCell'
 import { BeadColor, Toast } from '../lib/types'
 
@@ -13,9 +15,14 @@ const QUICK_DELTAS = [100, 500, 1000, 2000]
 export default function Inventory({ showToast }: InventoryProps) {
   const { inventory, loading, updateQuantity, setQuantity, bulkUpdateQuantity, bulkSetQuantity,
           undo, clearHistory, getLowStockItems, undoStack, history } = useInventory()
+  const { settings } = useSettings()
+  const globalThreshold = settings?.low_threshold_default ?? 50
   const [beadColors, setBeadColors] = useState<BeadColor[]>([])
   const [activeSeries, setActiveSeries] = useState<string>('ALL')
   const [search, setSearch] = useState('')
+  const [showLowStockOnly, setShowLowStockOnly] = useState(false)
+
+  const [searchParams, setSearchParams] = useSearchParams()
 
   // Bulk panel state
   const [bulkOpen, setBulkOpen] = useState(false)
@@ -31,14 +38,25 @@ export default function Inventory({ showToast }: InventoryProps) {
     fetch('./bead-colors.json').then(r => r.json()).then(setBeadColors).catch(console.error)
   }, [])
 
-  const lowStockItems = getLowStockItems()
+  // Activate low-stock filter when navigated here with ?filter=low
+  useEffect(() => {
+    if (searchParams.get('filter') === 'low') {
+      setShowLowStockOnly(true)
+      setSearchParams({}, { replace: true })
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const lowStockItems = getLowStockItems(globalThreshold)
+  const lowStockSet = useMemo(() => new Set(lowStockItems.map(i => i.color_code)), [lowStockItems])
+
   const totalColors = Object.values(inventory).filter(i => i.quantity > 0).length
   const totalBeads = Object.values(inventory).reduce((s, i) => s + i.quantity, 0)
 
   const filtered = beadColors.filter(c => {
     const matchesSeries = activeSeries === 'ALL' || c.series === activeSeries
     const matchesSearch = search === '' || c.code.toLowerCase().includes(search.toLowerCase())
-    return matchesSeries && matchesSearch
+    const matchesLowStock = !showLowStockOnly || lowStockSet.has(c.code)
+    return matchesSeries && matchesSearch && matchesLowStock
   })
 
   const effectiveSeries = bulkSeries.length > 0 ? bulkSeries : null
@@ -136,10 +154,17 @@ export default function Inventory({ showToast }: InventoryProps) {
           <p className="text-xs text-gray-400">已追踪颜色</p>
           <p className="text-xl font-black text-gray-900">{loading ? '…' : totalColors}<span className="text-xs font-normal text-gray-400 ml-1">种</span></p>
         </div>
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-3">
-          <p className="text-xs text-gray-400">库存不足</p>
+        <button
+          onClick={() => setShowLowStockOnly(v => !v)}
+          className={`rounded-xl shadow-sm border px-4 py-3 text-left transition-colors w-full ${
+            showLowStockOnly
+              ? 'bg-orange-50 border-orange-200 ring-2 ring-orange-300'
+              : 'bg-white border-gray-100 hover:border-orange-200'
+          }`}
+        >
+          <p className="text-xs text-gray-400">库存不足 {showLowStockOnly ? '· 已筛选' : ''}</p>
           <p className="text-xl font-black text-orange-500">{loading ? '…' : lowStockItems.length}<span className="text-xs font-normal text-gray-400 ml-1">种</span></p>
-        </div>
+        </button>
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-3">
           <p className="text-xs text-gray-400">总豆子数</p>
           <p className="text-xl font-black text-gray-900">
@@ -286,6 +311,7 @@ export default function Inventory({ showToast }: InventoryProps) {
               key={color.code}
               color={color}
               item={inventory[color.code] ?? null}
+              threshold={globalThreshold}
               onSetQuantity={setQuantity}
               onUpdateQuantity={updateQuantity}
             />
