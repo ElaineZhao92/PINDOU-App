@@ -49,7 +49,7 @@ export default function Inventory({ showToast }: InventoryProps) {
   const lowStockItems = getLowStockItems(globalThreshold)
   const lowStockSet = useMemo(() => new Set(lowStockItems.map(i => i.color_code)), [lowStockItems])
 
-  const totalColors = Object.values(inventory).filter(i => i.quantity > 0).length
+  const totalColors = Object.values(inventory).length
   const totalBeads = Object.values(inventory).reduce((s, i) => s + i.quantity, 0)
 
   const filtered = beadColors.filter(c => {
@@ -150,10 +150,15 @@ export default function Inventory({ showToast }: InventoryProps) {
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-3">
-          <p className="text-xs text-gray-400">已追踪颜色</p>
+        <button
+          onClick={() => showLowStockOnly && setShowLowStockOnly(false)}
+          className={`rounded-xl shadow-sm border px-4 py-3 text-left w-full transition-colors ${
+            showLowStockOnly ? 'bg-white border-gray-100 hover:border-gray-300 cursor-pointer' : 'bg-white border-gray-100 cursor-default'
+          }`}
+        >
+          <p className="text-xs text-gray-400">已追踪颜色 {showLowStockOnly ? '· 点击查看全部' : ''}</p>
           <p className="text-xl font-black text-gray-900">{loading ? '…' : totalColors}<span className="text-xs font-normal text-gray-400 ml-1">种</span></p>
-        </div>
+        </button>
         <button
           onClick={() => setShowLowStockOnly(v => !v)}
           className={`rounded-xl shadow-sm border px-4 py-3 text-left transition-colors w-full ${
