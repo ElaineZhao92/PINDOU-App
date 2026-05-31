@@ -1,6 +1,6 @@
 # 我嘞个豆 · PINDOU
 
-> 拼豆爱好者的全能助手 —— 库存管理、图纸生成、AI 识别，一站搞定
+拼豆爱好者的全能助手 —— 库存管理、图纸生成、AI 识别，一站搞定
 
 [![Deploy to GitHub Pages](https://github.com/ElaineZhao92/PINDOU-App/actions/workflows/deploy.yml/badge.svg)](https://github.com/ElaineZhao92/PINDOU-App/actions/workflows/deploy.yml)
 
